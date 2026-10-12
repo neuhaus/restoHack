@@ -109,6 +109,10 @@ cmake --preset=release && cmake --build build
 
 **For BSD systems, development builds, IDE integration, and troubleshooting:** see [**Build Instructions**](docs/BUILD.md)
 
+### Raspberry Pi Pico (RP2040) 
+
+You can install the game on this SoC using [rp2040-console](https://github.com/neuhaus/rp2040-console), a minimal environment to run UNIX apps standalone on Raspberry Pi Pico. The 2MB Flash version works well, no SD card required. It's probably the cheapest platform able to run hack 1.0.3!
+
 ### Windows (Work in Progress)
 
 A `windows-port` branch exists targeting **MSVC** and **MinGW64** using **PDCurses**.
