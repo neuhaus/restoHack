@@ -96,6 +96,28 @@ struct ext_func_tab extcmdlist[] = {
 
 extern char *parse(), quitchars[];
 
+/* QWERTZ keyboards (Central Europe): with the qwertz option, the physical
+ * key in the Y position (labelled Z) moves NW and the one in the Z position
+ * (labelled Y) zaps - i.e. the y/z bindings are exchanged, both cases.
+ * Same semantics as NetHack's swap_yz. Only command dispatch (rhack) and
+ * direction prompts (getdir) are translated; text entry is untouched. */
+static char swap_yz(char c) {
+  if (!flags.qwertz)
+    return c;
+  switch (c) {
+  case 'y':
+    return 'z';
+  case 'z':
+    return 'y';
+  case 'Y':
+    return 'Z';
+  case 'Z':
+    return 'Y';
+  default:
+    return c;
+  }
+}
+
 void rhack(char *cmd) {
   struct func_tab *tlist = cmdlist;
   boolean firsttime = FALSE;
@@ -106,34 +128,10 @@ void rhack(char *cmd) {
     flags.nopick = 0;
     cmd = parse();
   }
-  /* QWERTZ keyboards (Central Europe): with the qwertz option, the physical
-   * key in the Y position (labelled Z) moves NW and the one in the Z position
-   * (labelled Y) zaps - i.e. the y/z bindings are exchanged, both cases.
-   * Same semantics as NetHack's swap_yz. Text entry (getlin/askname) is
-   * untouched: only command dispatch (here) and direction prompts (getdir)
-   * are translated. */
-  if (flags.qwertz) {
-    if (*cmd == 'y')
-      *cmd = 'z';
-    else if (*cmd == 'z')
-      *cmd = 'y';
-    else if (*cmd == 'Y')
-      *cmd = 'Z';
-    else if (*cmd == 'Z')
-      *cmd = 'Y';
-    /* f/F/m/M movement prefixes carry the direction as second char */
-    if ((*cmd == 'f' || *cmd == 'F' || *cmd == 'm' || *cmd == 'M') &&
-        cmd[1]) {
-      if (cmd[1] == 'y')
-        cmd[1] = 'z';
-      else if (cmd[1] == 'z')
-        cmd[1] = 'y';
-      else if (cmd[1] == 'Y')
-        cmd[1] = 'Z';
-      else if (cmd[1] == 'Z')
-        cmd[1] = 'Y';
-    }
-  }
+  *cmd = swap_yz(*cmd);
+  /* f/F/m/M movement prefixes carry the direction as second char */
+  if ((*cmd == 'f' || *cmd == 'F' || *cmd == 'm' || *cmd == 'M') && cmd[1])
+    cmd[1] = swap_yz(cmd[1]);
   if (!*cmd || (*cmd & 0377) == 0377 ||
       (flags.no_rest_on_space && *cmd == ' ')) {
     bell();
@@ -288,17 +286,7 @@ int getdir(boolean s) {
 
   if (s)
     pline("In what direction?");
-  dirsym = readchar();
-  if (flags.qwertz) { /* see rhack(): keep direction prompts consistent */
-    if (dirsym == 'y')
-      dirsym = 'z';
-    else if (dirsym == 'z')
-      dirsym = 'y';
-    else if (dirsym == 'Y')
-      dirsym = 'Z';
-    else if (dirsym == 'Z')
-      dirsym = 'Y';
-  }
+  dirsym = swap_yz(readchar());
   if (!movecmd(dirsym) && !u.dz) {
     if (!index(quitchars, dirsym))
       pline("What a strange direction!");
