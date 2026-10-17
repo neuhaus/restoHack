@@ -6,7 +6,7 @@
  * expects, translated to ANSI escapes that xterm.js understands. Actual
  * I/O (bytes in/out, termios raw mode, window size, Ctrl+C) is handled by
  * the xterm-pty bridge between Emscripten and xterm.js - see
- * wasm/shell.html and wasm/README.md. This file deliberately compiles
+ * wasm/index.html and wasm/README.md. This file deliberately compiles
  * (as harmless no-op shims) with a native compiler too, so the stranded
  * logic stays syntax-checked without an Emscripten SDK on hand.
  */

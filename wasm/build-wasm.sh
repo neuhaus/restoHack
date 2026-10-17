@@ -6,7 +6,8 @@
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BUILD_DIR="${BUILD_DIR:-$ROOT/build/wasm}"
+BUILD_DIR="${BUILD_DIR:-$ROOT/build/wasm}"      # the servable bundle
+OBJ_DIR="${OBJ_DIR:-$ROOT/build/wasm-build}"    # CMake working dir
 
 if ! command -v emcc >/dev/null 2>&1; then
   echo "error: emcc not found. Install the Emscripten SDK first:" >&2
@@ -34,7 +35,7 @@ fetch() { # URL DEST SHA256
   fi
 }
 
-mkdir -p "$BUILD_DIR"
+mkdir -p "$BUILD_DIR" "$OBJ_DIR"
 XTERM=https://unpkg.com/@xterm/xterm@5.5.0
 PTY=https://unpkg.com/xterm-pty@0.12.0
 fetch "$XTERM/lib/xterm.js"    "$BUILD_DIR/xterm.js"           1f991ac3b4b283ebf96e60ae23a00a52765dd3a2e46fa6fdda9f1aab032f7495
@@ -43,15 +44,15 @@ fetch "$PTY/index.mjs"         "$BUILD_DIR/xterm-pty.mjs"      9d1ab8c5f3af23ddc
 # The link step references the glue at this gitignored source-tree path.
 fetch "$PTY/emscripten-pty.js" "$ROOT/wasm/emscripten-pty.js"  93d474cb4141461145c6a01aa76bbe6f75313b562051519c8bcd21d367125315
 
-emcmake cmake -S "$ROOT" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release
-cmake --build "$BUILD_DIR"
+emcmake cmake -S "$ROOT" -B "$OBJ_DIR" -DCMAKE_BUILD_TYPE=Release
+cmake --build "$OBJ_DIR"
 
-# Stage the page next to hack.mjs/hack.wasm and the fetched assets, so the
-# whole directory is a self-contained, offline-playable bundle.
-cp "$ROOT/wasm/shell.html" "$BUILD_DIR/shell.html"
+# Stage the servable bundle: the page, the Emscripten output and the
+# fetched assets - nothing else.
+cp "$OBJ_DIR/hack.mjs" "$OBJ_DIR/hack.wasm" "$OBJ_DIR/hack.data" "$BUILD_DIR/"
+cp "$ROOT/wasm/index.html" "$BUILD_DIR/index.html"
 
 echo
-echo "Built: $BUILD_DIR/hack.mjs + $BUILD_DIR/hack.wasm"
-echo "Serve over HTTP (COOP/COEP not required for the Asyncify build) and open shell.html:"
+echo "Built: $BUILD_DIR (self-contained; serve it and open /):"
 echo "  cd $BUILD_DIR && python3 -m http.server 8000"
-echo "  -> http://localhost:8000/shell.html"
+echo "  -> http://localhost:8000/"

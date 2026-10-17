@@ -468,7 +468,7 @@ endif()
 # All sanitizer control now handled by ENABLE_SANITIZERS option above (lines 306-322)
 
 # --- WebAssembly (Emscripten) linkage ---
-# Produces hack.mjs/hack.wasm for wasm/shell.html. Blocking terminal I/O
+# Produces hack.mjs/hack.wasm for wasm/index.html. Blocking terminal I/O
 # (getchar everywhere) is bridged to xterm.js with Asyncify; see
 # wasm/README.md for the full story and the exact build command.
 if(EMSCRIPTEN)
@@ -488,7 +488,7 @@ if(EMSCRIPTEN)
     -sALLOW_MEMORY_GROWTH=1
     # exit() (quit/death/save) must tear down the runtime so onExit fires
     -sEXIT_RUNTIME=1
-    # Expose the virtual FS so shell.html can flush and list save games
+    # Expose the virtual FS so index.html can flush and list save games
     -sEXPORTED_RUNTIME_METHODS=FS
     -lidbfs.js
     --js-library=${WASM_PTY_JS}
@@ -497,7 +497,7 @@ if(EMSCRIPTEN)
     # Saves persist separately: wasm/pre.js mounts IDBFS at /save.
     --preload-file=${CMAKE_BINARY_DIR}/hackdir@/
   )
-  # ES module for wasm/shell.html
+  # ES module for wasm/index.html
   set_target_properties(hack PROPERTIES SUFFIX ".mjs")
   # CMake cannot see the JS inputs consumed at link time; force a relink
   # when they change (a stale link silently keeps the old pre.js).
