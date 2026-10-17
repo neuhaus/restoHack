@@ -29,9 +29,12 @@ extern void settty(const char *s);
  *
  * WHY: Original 1984 code used only BSD sgtty interfaces. Modern FreeBSD
  * has deprecated sgtty in favor of POSIX termios for standards compliance.
+ * Emscripten also takes the termios path: the xterm-pty bridge intercepts
+ * the TCGETS/TCSETS ioctls so raw mode keeps working in the browser.
  *
  * HOW: Uses feature detection to include appropriate terminal headers:
  * - Linux: Always POSIX termios
+ * - Emscripten: POSIX termios (served by the xterm-pty bridge, see wasm/)
  * - FreeBSD: POSIX termios (modern standard)
  * - Other BSD: Original sgtty interface (compatibility)
  *
@@ -40,6 +43,8 @@ extern void settty(const char *s);
  */
 #ifdef __linux__
 #include <termios.h>
+#elif defined(__EMSCRIPTEN__)
+#include <termios.h> /* xterm-pty serves the TCGETS/TCSETS ioctls underneath */
 #else
 /* ORIGINAL 1984: #include	<sgtty.h> */
 /* MODERN: FreeBSD uses POSIX termios like Linux */

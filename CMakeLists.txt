@@ -17,8 +17,8 @@ set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # Ensure binaries carry a build-id for coredumpctl/gdb symbolication
-# Apple's linker does not support --build-id
-if(NOT APPLE)
+# Apple's linker does not support --build-id; Emscripten needs no ELF flags
+if(NOT APPLE AND NOT EMSCRIPTEN)
   add_link_options(-Wl,--build-id)
 endif()
 
@@ -32,7 +32,8 @@ string(STRIP "${CMAKE_C_FLAGS}" CMAKE_C_FLAGS)
 # Removed global include_directories() - using target-specific includes instead
 
 # Find required libraries - modern curses detection for NetBSD/pkgsrc compatibility
-if(NOT DEFINED CURSES_FOUND)
+# WebAssembly builds use wasm/wasm.c instead of curses (see wasm/README.md)
+if(NOT EMSCRIPTEN AND NOT DEFINED CURSES_FOUND)
     find_package(Curses REQUIRED)
 endif()
 
@@ -75,6 +76,12 @@ endif()
 # Check if delay_output is available in curses library
 set(CMAKE_REQUIRED_INCLUDES ${CURSES_INCLUDE_DIR})
 check_symbol_exists(delay_output "curses.h" HAVE_DELAY_OUTPUT)
+
+# The Emscripten build provides delay_output() itself (wasm/wasm.c); the
+# probe above cannot see it, so mark it available.
+if(EMSCRIPTEN)
+    set(HAVE_DELAY_OUTPUT 1)
+endif()
 
 # Generate config.h with feature detection results
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/config.h.in")
@@ -150,16 +157,31 @@ set(HACK_SOURCES
 )
 
 # Build makedefs utility first
-add_executable(makedefs src/makedefs.c)
+# (emcc output cannot run on the build host; makedefs is built with a host compiler)
+if(EMSCRIPTEN)
+    if(NOT HOST_C_COMPILER)
+        find_program(HOST_C_COMPILER NAMES cc gcc clang REQUIRED)
+    endif()
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/hack.onames.h
+        COMMAND ${HOST_C_COMPILER} -O1 -o ${CMAKE_CURRENT_BINARY_DIR}/makedefs-host ${CMAKE_CURRENT_SOURCE_DIR}/src/makedefs.c
+        COMMAND ${CMAKE_CURRENT_BINARY_DIR}/makedefs-host ${CMAKE_CURRENT_SOURCE_DIR}/src/def.objects.h > ${CMAKE_CURRENT_BINARY_DIR}/hack.onames.h
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/makedefs.c
+                ${CMAKE_CURRENT_SOURCE_DIR}/src/def.objects.h
+        COMMENT "Generating hack.onames.h with host-built makedefs (wasm)"
+    )
+else()
+    add_executable(makedefs src/makedefs.c)
 
-# Modern CMake: Generate hack.onames.h using makedefs with proper paths
-add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/hack.onames.h
-    COMMAND makedefs ${CMAKE_CURRENT_SOURCE_DIR}/src/def.objects.h > ${CMAKE_CURRENT_BINARY_DIR}/hack.onames.h
-    DEPENDS makedefs ${CMAKE_CURRENT_SOURCE_DIR}/src/def.objects.h
-    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-    COMMENT "Generating hack.onames.h with original Hack 1.0.3 object definitions"
-)
+    # Modern CMake: Generate hack.onames.h using makedefs with proper paths
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/hack.onames.h
+        COMMAND makedefs ${CMAKE_CURRENT_SOURCE_DIR}/src/def.objects.h > ${CMAKE_CURRENT_BINARY_DIR}/hack.onames.h
+        DEPENDS makedefs ${CMAKE_CURRENT_SOURCE_DIR}/src/def.objects.h
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        COMMENT "Generating hack.onames.h with original Hack 1.0.3 object definitions"
+    )
+endif()
 
 # Main hack executable
 add_executable(hack ${HACK_SOURCES} ${CMAKE_CURRENT_BINARY_DIR}/hack.onames.h)
@@ -173,8 +195,19 @@ target_include_directories(hack PRIVATE
     ${CURSES_INCLUDE_DIR}
 )
 
+# WebAssembly extras: terminal/POSIX shims (wasm/wasm.c, wasm/wasm.h)
+if(EMSCRIPTEN)
+    target_sources(hack PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/wasm/wasm.c)
+    target_include_directories(hack PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/wasm
+        # Stub <curses.h>/<termcap.h>: Emscripten has neither; wasm/wasm.h
+        # already declares the symbols the game sources use from them.
+        ${CMAKE_CURRENT_SOURCE_DIR}/wasm/stub-include)
+endif()
+
 # Enhanced Debug profile for better postmortem analysis
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+# (Emscripten has no use for host backtrace flags like -rdynamic)
+if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT EMSCRIPTEN)
   target_compile_options(hack PRIVATE -fno-omit-frame-pointer)
   target_link_options(hack PRIVATE -rdynamic)
 endif()
@@ -226,7 +259,11 @@ endif()
 # Optimization handled in hardening section below
 
 # Runtime path configuration - inject absolute paths to prevent hardcoded path issues
-if(DEFINED HACKDIR_OVERRIDE)
+if(EMSCRIPTEN)
+    target_compile_definitions(hack PRIVATE
+        SAVE_VERSION="${PROJECT_VERSION}"
+    )
+elseif(DEFINED HACKDIR_OVERRIDE)
     target_compile_definitions(hack PRIVATE 
         HACKDIR="${HACKDIR_OVERRIDE}"
         SAVE_VERSION="${PROJECT_VERSION}"
@@ -278,11 +315,12 @@ option(ENABLE_FUZZING "libFuzzer targets (Clang only)" OFF)
 # Common hardening flags
 target_compile_options(hack PRIVATE -Wall -Wextra -fstack-protector-strong)
 
-# Stack clash protection (GCC feature)
+# Stack clash protection (GCC feature; also skipped for Emscripten, which
+# warns the flag is unused and needs none of it)
 include(CheckCCompilerFlag)
 check_c_compiler_flag("-fstack-clash-protection" HAS_SCP)
 # AppleClang accepts the flag but warns on every file; skip on macOS
-if(HAS_SCP AND NOT APPLE)
+if(HAS_SCP AND NOT APPLE AND NOT EMSCRIPTEN)
     target_compile_options(hack PRIVATE -fstack-clash-protection)
     message(STATUS "Stack clash protection enabled")
 endif()
@@ -291,8 +329,9 @@ endif()
 target_compile_options(hack PRIVATE 
     $<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<CONFIG:MinSizeRel>>:-O2 -fPIE>
 )
-# ELF hardening: RELRO, BIND_NOW, noexecstack (not supported by Apple's linker)
-if(NOT APPLE)
+# ELF hardening: RELRO, BIND_NOW, noexecstack
+# (not supported by Apple's linker, meaningless for WebAssembly)
+if(NOT APPLE AND NOT EMSCRIPTEN)
   target_link_options(hack PRIVATE
       $<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<CONFIG:MinSizeRel>>:-pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack>
   )
@@ -354,8 +393,8 @@ if(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
 
   # PIE + RELRO/NOW + NX (noexecstack) — production-ready with symbols for debugging
   target_compile_options(hack PRIVATE -fPIE)
-  # ELF hardening (not supported by Apple's linker)
-  if(NOT APPLE)
+  # ELF hardening (not supported by Apple's linker, meaningless for WebAssembly)
+  if(NOT APPLE AND NOT EMSCRIPTEN)
     target_link_options(hack PRIVATE -pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack)
   endif()
 
@@ -371,7 +410,10 @@ if(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
 endif()
 
 # Link libraries
-target_link_libraries(hack ${CURSES_LIBRARIES})
+# (WebAssembly links no curses; the terminal lives in wasm/wasm.c + xterm.js)
+if(NOT EMSCRIPTEN)
+  target_link_libraries(hack ${CURSES_LIBRARIES})
+endif()
 if(COMPAT_LIBRARY)
     target_link_libraries(hack ${COMPAT_LIBRARY})
 endif()
@@ -396,7 +438,9 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
 elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
   # Dev build = symbols + easy backtraces, warnings don’t kill flow
   target_compile_options(hack PRIVATE -O0 -g3 -fno-omit-frame-pointer -Wwrite-strings -Wno-error)
-  target_link_options(hack PRIVATE -rdynamic)
+  if(NOT EMSCRIPTEN)
+    target_link_options(hack PRIVATE -rdynamic)
+  endif()
 elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
   # safe, strict, but do NOT fail on warnings
   target_compile_options(hack PRIVATE
@@ -406,8 +450,8 @@ elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
   )
   # Fortify (3 if toolchain supports it; harmless if ignored)
   target_compile_definitions(hack PRIVATE _FORTIFY_SOURCE=3)
-  # ELF hardening (not supported by Apple's linker)
-  if(NOT APPLE)
+  # ELF hardening (not supported by Apple's linker, meaningless for WebAssembly)
+  if(NOT APPLE AND NOT EMSCRIPTEN)
     target_link_options(hack PRIVATE
       -pie
       -Wl,-z,relro,-z,now
@@ -422,6 +466,44 @@ endif()
 
 # REMOVED: Conflicting sanitizer configuration that was overriding ENABLE_SANITIZERS
 # All sanitizer control now handled by ENABLE_SANITIZERS option above (lines 306-322)
+
+# --- WebAssembly (Emscripten) linkage ---
+# Produces hack.mjs/hack.wasm for wasm/shell.html. Blocking terminal I/O
+# (getchar everywhere) is bridged to xterm.js with Asyncify; see
+# wasm/README.md for the full story and the exact build command.
+if(EMSCRIPTEN)
+  # Emscripten glue for xterm-pty (fetched by wasm/build-wasm.sh).
+  set(WASM_PTY_JS "${CMAKE_CURRENT_SOURCE_DIR}/wasm/emscripten-pty.js"
+      CACHE FILEPATH "xterm-pty Emscripten JS library")
+  if(NOT EXISTS "${WASM_PTY_JS}")
+    message(WARNING "WASM_PTY_JS missing (${WASM_PTY_JS}); run wasm/build-wasm.sh to stage it")
+  endif()
+
+  target_link_options(hack PRIVATE
+    # Emscripten minifies the emitted JS in any optimized build; keep the
+    # served hack.mjs readable (no effect on the .wasm itself).
+    --minify 0
+    -sASYNCIFY=1
+    -sFORCE_FILESYSTEM=1
+    -sALLOW_MEMORY_GROWTH=1
+    # exit() (quit/death/save) must tear down the runtime so onExit fires
+    -sEXIT_RUNTIME=1
+    # Expose the virtual FS so shell.html can flush and list save games
+    -sEXPORTED_RUNTIME_METHODS=FS
+    -lidbfs.js
+    --js-library=${WASM_PTY_JS}
+    --pre-js=${CMAKE_CURRENT_SOURCE_DIR}/wasm/pre.js
+    # Static playground: data files, help, rumors, score/lock placeholders.
+    # Saves persist separately: wasm/pre.js mounts IDBFS at /save.
+    --preload-file=${CMAKE_BINARY_DIR}/hackdir@/
+  )
+  # ES module for wasm/shell.html
+  set_target_properties(hack PROPERTIES SUFFIX ".mjs")
+  # CMake cannot see the JS inputs consumed at link time; force a relink
+  # when they change (a stale link silently keeps the old pre.js).
+  set_target_properties(hack PROPERTIES LINK_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/wasm/pre.js;${WASM_PTY_JS}")
+endif()
 
 # Data files
 set(DATA_FILES rumors help hh data)

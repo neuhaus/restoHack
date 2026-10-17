@@ -29,4 +29,9 @@
 #define random  rand
 #endif
 
+/* Modern: WebAssembly/browser compatibility layer injection */
+#ifdef __EMSCRIPTEN__
+#include "wasm.h"
+#endif
+
 #endif /* RESTOHACK_COMPAT_H */
