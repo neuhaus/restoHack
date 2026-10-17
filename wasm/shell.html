@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>restoHack 1.0.3 — Hack (1985) in the browser</title>
+    <link rel="stylesheet" href="./xterm.css" />
+    <style>
+      :root{color-scheme:dark}body{background:#0c0c0c;color:#ccc;font-family:monospace;margin:0;display:flex;flex-direction:column;align-items:center;min-height:100vh}header{text-align:center;padding:12px 16px 4px}header h1{font-size:16px;margin:0 0 4px;font-weight:normal}#terminal{border:1px solid #333;padding:4px;background:#000}#status{font-size:12px;color:#888;padding:8px 16px 16px;text-align:center;max-width:720px}
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>hack 1.0.3 in your browser - with restoHack and wasm</h1>
+    </header>
+    <div id="terminal"></div>
+    <div id="saves"></div>
+    <div id="status"></div>
+    <script src="./xterm.js"></script>
+    <script type="module">
+      import { openpty } from "./xterm-pty.mjs";
+      import initEmscripten from "./hack.mjs";
+
+      const status = document.getElementById("status");
+      const savesLine = document.getElementById("saves");
+      const term = new Terminal({ cols: 80, rows: 24 });
+      term.open(document.getElementById("terminal"));
+      term.focus();
+      term.element.addEventListener("click", () => term.focus());
+
+      // PTY layer between xterm.js and the Emscripten game: line
+      // discipline, termios ioctls, window size and Ctrl+C handling.
+      const { master: leader, slave: follower } = openpty();
+      term.loadAddon(leader);
+
+      let game = null;
+      // Save files are /save/<uid><player>; strip the uid prefix.
+      const savePlayer = (file) => {
+        const m = file.match(/^\d+(.+)$/);
+        return m ? m[1] : null;
+      };
+      // Snapshot /save: player name -> mtime:size, so a later listing can
+      // tell which saves are new or changed.
+      const snapshotSaves = async () => {
+        const snap = {};
+        try {
+          for (const f of game.FS.readdir("/save")) {
+            if (f === "." || f === "..") continue;
+            const name = savePlayer(f);
+            if (!name) continue;
+            try {
+              const st = game.FS.stat("/save/" + f);
+              snap[name] = st.mtime.getTime() + ":" + st.size;
+            } catch (e) {}
+          }
+        } catch (e) {}
+        return snap;
+      };
+      const renderSaves = (snap) => {
+        const names = Object.keys(snap).sort();
+        savesLine.textContent = names.length
+          ? "Saved games: " + names.join(", ")
+          : "";
+      };
+      let savesBefore = {};
+
+      try {
+        // The options object is the channel to wasm/pre.js, which runs
+        // inside the module and attaches flushSaves() and the
+        // savesPersistent flag to it.
+        const moduleOpts = {
+          pty: follower,
+          onExit() {
+            snapshotSaves().then((after) => {
+              renderSaves(after);
+              const fresh = Object.keys(after).filter(
+                (n) => savesBefore[n] !== after[n]
+              );
+              // Make the final state durable before suggesting a reload;
+              // the game has stopped writing, so a full flush (which also
+              // carries save deletions from death or abandoning) is safe.
+              if (moduleOpts.savesPersistent === false)
+                return report();
+              let tries = 0;
+              (function persist() {
+                moduleOpts.flushSaves().then(handle, handle);
+                function handle(err) {
+                  if (!err)
+                    return report();
+                  if (++tries < 20)
+                    return setTimeout(persist, 1500);
+                  console.error("restoHack: could not persist saves:", err);
+                  moduleOpts.savesPersistent = false;
+                  report();
+                }
+              })();
+              function report() {
+                if (moduleOpts.savesPersistent === false) {
+                  status.textContent =
+                    "Browser storage could not be written - saves were not kept this session.";
+                  return;
+                }
+                status.textContent =
+                  fresh.length > 0
+                    ? "Game saved (" +
+                      fresh.join(", ") +
+                      ") — reload the page to continue."
+                    : "Reload the page to play again.";
+              }
+            });
+          },
+        };
+        game = await initEmscripten(moduleOpts);
+        // With Asyncify the module promise can resolve while the game is
+        // still parked on input; the FS is usable from here on regardless.
+        savesBefore = await snapshotSaves();
+        renderSaves(savesBefore);
+        if (moduleOpts.savesPersistent === false)
+          status.textContent =
+            "Warning: browser storage is unavailable - saved games will not survive a page reload.";
+      } catch (e) {
+        console.error(e);
+        status.textContent =
+          "Failed to start the game (" + e + "). See the console for details.";
+      }
+    </script>
+  </body>
+</html>
