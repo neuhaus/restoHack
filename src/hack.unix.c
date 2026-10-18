@@ -178,11 +178,7 @@ struct stat buf, hbuf;
 
 void gethdate(char *name) {
 #ifdef __EMSCRIPTEN__
-  /* Modern: in the browser there is no executable path to stat (argv[0] is
-   * the virtual "./this.program"); dating the binary against save files is
-   * meaningless for a single immutable artifact. Leave hbuf zeroed so
-   * uptodate() treats saves as current (the save format is versioned
-   * anyway - see hack.save.c). */
+  /* Modern: in the browser there is no executable path to stat */
   (void)name;
   memset(&hbuf, 0, sizeof(hbuf));
   return;
