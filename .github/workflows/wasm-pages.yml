@@ -30,9 +30,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-        with:
-          # The browser infrastructure lives in the wasm/utw submodule.
-          submodules: recursive
+
+      # Only wasm/utw is needed; a recursive checkout fails because the tree
+      # also carries a windows/pdcurses gitlink with no .gitmodules entry.
+      - name: Fetch the browser template submodule
+        run: git submodule update --init wasm/utw
 
       - name: Read the pinned Emscripten version
         id: emsdk-version
